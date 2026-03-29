@@ -35,18 +35,73 @@ else
   exit 1
 fi
 
-LATEST_TAG=$(
+ALL_TAGS=$(
   git ls-remote --tags --refs "https://github.com/${OWNER}/${REPO}.git" |
     awk '{print $2}' |
     sed 's#refs/tags/##' |
-    sort -V |
-    tail -n1
+    sort -V
 )
 
-if [ -z "${LATEST_TAG:-}" ]; then
-  echo "Could not determine latest tag for ${OWNER}/${REPO}"
+if [ -z "${ALL_TAGS:-}" ]; then
+  echo "Could not find any tags for ${OWNER}/${REPO}"
   exit 1
 fi
+
+if command -v fzf >/dev/null 2>&1; then
+  # Temporarily disable set -e so a cancelled fzf (exit 130) doesn't kill the script
+  set +e
+  CHOSEN_TAG=$(echo "$ALL_TAGS" | fzf --tac --prompt="Select tag> " --height=15 --layout=reverse --border)
+  FZF_EXIT=$?
+  set -e
+  if [ $FZF_EXIT -ne 0 ] || [ -z "${CHOSEN_TAG:-}" ]; then
+    echo "No tag selected. Aborting."
+    exit 1
+  fi
+else
+  # Fallback: show numbered list with optional filter
+  while true; do
+    printf "Filter tags (leave blank to show all): "
+    read -r FILTER
+    if [ -z "$FILTER" ]; then
+      FILTERED="$ALL_TAGS"
+    else
+      # -F: literal string match; -- guards against filter strings starting with '-'
+      FILTERED=$(echo "$ALL_TAGS" | grep -iF -- "$FILTER" || true)
+    fi
+
+    if [ -z "$FILTERED" ]; then
+      echo "No tags match '${FILTER}'. Try again."
+      continue
+    fi
+
+    echo ""
+    i=1
+    while IFS= read -r tag; do
+      printf "  %3d) %s\n" "$i" "$tag"
+      i=$((i + 1))
+    done <<< "$FILTERED"
+    echo ""
+
+    TAG_COUNT=$(echo "$FILTERED" | wc -l | tr -d ' ')
+    printf "Choose a tag [1-%s]: " "$TAG_COUNT"
+    read -r CHOICE
+
+    if ! [[ "$CHOICE" =~ ^[0-9]+$ ]] || [ "$CHOICE" -lt 1 ] || [ "$CHOICE" -gt "$TAG_COUNT" ]; then
+      echo "Invalid choice. Try again."
+      continue
+    fi
+
+    CHOSEN_TAG=$(echo "$FILTERED" | sed -n "${CHOICE}p")
+    break
+  done
+fi
+
+if [ -z "${CHOSEN_TAG:-}" ]; then
+  echo "No tag selected. Aborting."
+  exit 1
+fi
+
+LATEST_TAG="$CHOSEN_TAG"
 
 NEW_URL="https://github.com/${OWNER}/${REPO}/archive/refs/tags/${LATEST_TAG}.tar.gz"
 
