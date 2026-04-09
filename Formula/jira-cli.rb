@@ -1,8 +1,8 @@
 class JiraCli < Formula
   desc "Minimal Jira CLI to fetch and sync tickets to a knowledge base"
   homepage "https://github.com/SebastianKuehl/jira-cli"
-  url "https://github.com/SebastianKuehl/jira-cli/archive/refs/tags/v0.1.0.tar.gz"
-  sha256 "dbb506d1167850c978e8566ef0ba59d488fd4ebfa0c8e17ed1aba46922e325bb"
+  url "https://github.com/SebastianKuehl/jira-cli/archive/refs/tags/v0.1.1.tar.gz"
+  sha256 "33dbe332f5617e48f80c5ff68288d069a7d1c28e7f386006cc3d96d163350ae5"
 
   depends_on "go" => :build
 
