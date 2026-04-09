@@ -216,6 +216,7 @@ infer_rust_bin_names() {
   local source_dir="$1"
   local package_name="$2"
   local directory
+  local nested_bin_dirs_file="${TMP_DIR}/rust-bin-dirs.txt"
 
   if [[ -f "${source_dir}/src/main.rs" ]]
   then
@@ -225,10 +226,11 @@ infer_rust_bin_names() {
   if [[ -d "${source_dir}/src/bin" ]]
   then
     find "${source_dir}/src/bin" -mindepth 1 -maxdepth 1 -type f -name '*.rs' -exec basename {} .rs \;
+    find "${source_dir}/src/bin" -mindepth 2 -maxdepth 2 -type f -name 'main.rs' -exec dirname {} \; >"${nested_bin_dirs_file}"
     while IFS= read -r directory
     do
       basename "${directory}"
-    done < <(find "${source_dir}/src/bin" -mindepth 2 -maxdepth 2 -type f -name 'main.rs' -exec dirname {} \;)
+    done <"${nested_bin_dirs_file}"
   fi
 }
 
@@ -290,14 +292,16 @@ count_root_go_mains() {
   local source_dir="$1"
   local count=0
   local file
+  local root_go_files="${TMP_DIR}/root-go-files.txt"
 
+  find "${source_dir}" -maxdepth 1 -type f -name '*.go' -print0 >"${root_go_files}"
   while IFS= read -r -d '' file
   do
     if grep -q '^package main$' "${file}"
     then
       count=$((count + 1))
     fi
-  done < <(find "${source_dir}" -maxdepth 1 -type f -name '*.go' -print0)
+  done <"${root_go_files}"
 
   printf '%s\n' "${count}"
 }
@@ -307,15 +311,20 @@ go_cmd_targets() {
   local directory
   local file
   local has_main
+  local cmd_dirs_file="${TMP_DIR}/cmd-dirs.txt"
+  local cmd_go_files="${TMP_DIR}/cmd-go-files.txt"
 
   if [[ ! -d "${source_dir}/cmd" ]]
   then
     return 0
   fi
 
+  find "${source_dir}/cmd" -mindepth 1 -maxdepth 1 -type d >"${cmd_dirs_file}"
+
   while IFS= read -r directory
   do
     has_main=0
+    find "${directory}" -type f -name '*.go' -print0 >"${cmd_go_files}"
     while IFS= read -r -d '' file
     do
       if grep -q '^package main$' "${file}"
@@ -323,13 +332,13 @@ go_cmd_targets() {
         has_main=1
         break
       fi
-    done < <(find "${directory}" -type f -name '*.go' -print0)
+    done <"${cmd_go_files}"
 
     if [[ "${has_main}" -eq 1 ]]
     then
       basename "${directory}"
     fi
-  done < <(find "${source_dir}/cmd" -mindepth 1 -maxdepth 1 -type d)
+  done <"${cmd_dirs_file}"
 }
 
 detect_build_strategy() {
@@ -384,6 +393,9 @@ formula_contents() {
   local sha256_literal="$5"
   local license_line="$6"
   local binary_literal="$7"
+  local install_block_content
+
+  install_block_content="$(install_block)"
 
   cat <<EOF
 class ${class_name} < Formula
@@ -393,7 +405,7 @@ class ${class_name} < Formula
   sha256 ${sha256_literal}
 ${license_line}
 
-$(install_block)
+${install_block_content}
 
   test do
     assert_predicate bin/${binary_literal}, :executable?
@@ -403,6 +415,9 @@ EOF
 }
 
 install_block() {
+  local binary_literal
+  local build_target_literal
+
   case "${BUILD_SYSTEM}" in
     rust)
       cat <<EOF
@@ -414,11 +429,13 @@ install_block() {
 EOF
       ;;
     go-root|go-cmd)
+      binary_literal="$(ruby_single_quoted_string "${BINARY_NAME}")"
+      build_target_literal="$(ruby_single_quoted_string "${GO_BUILD_TARGET}")"
       cat <<EOF
   depends_on "go" => :build
 
   def install
-    system "go", "build", *std_go_args(output: bin/$(ruby_single_quoted_string "${BINARY_NAME}")), $(ruby_single_quoted_string "${GO_BUILD_TARGET}")
+    system "go", "build", *std_go_args(output: bin/${binary_literal}), ${build_target_literal}
   end
 EOF
       ;;
@@ -430,6 +447,9 @@ EOF
 }
 
 main() {
+  local repo_options_output
+  local repo_metadata_output
+
   require_command gh
   require_command git
   require_command curl
@@ -447,7 +467,8 @@ main() {
   trap cleanup EXIT
 
   LOGIN="$(github_login)"
-  REPO_SELECTION="$(select_from_list "repo" "$(repo_options "${LOGIN}")" "Filter repos (leave blank to show all): ")"
+  repo_options_output="$(repo_options "${LOGIN}")"
+  REPO_SELECTION="$(select_from_list "repo" "${repo_options_output}" "Filter repos (leave blank to show all): ")"
   REPO_FULL_NAME="$(printf '%s\n' "${REPO_SELECTION}" | cut -f1)"
   OWNER="${REPO_FULL_NAME%%/*}"
   REPO="${REPO_FULL_NAME##*/}"
@@ -483,7 +504,8 @@ main() {
 
   detect_build_strategy "${SOURCE_DIR}"
 
-  IFS=$'\t' read -r DESCRIPTION LICENSE_ID <<<"$(repo_metadata "${OWNER}" "${REPO}")"
+  repo_metadata_output="$(repo_metadata "${OWNER}" "${REPO}")"
+  IFS=$'\t' read -r DESCRIPTION LICENSE_ID <<<"${repo_metadata_output}"
 
   if [[ -z "${DESCRIPTION}" ]]
   then
